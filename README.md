@@ -115,6 +115,15 @@ that needs the full detail (causes, per-collector status).
   HostPulse detects the unresolved `$VAR` and falls back to
   `os.uname().nodename` with a logged warning, rather than silently using
   the literal string `"$HOSTNAME"` as the server name.
+- **`lve_faults.py` tries `lveinfo --json` first**, falling back to
+  text-table parsing automatically if the output isn't valid JSON (older
+  lveinfo builds without `--json` support, or any unexpected output).
+  Confirmed against real CloudLinux `--json` output: fields map as
+  `ID`→username, `PMemF`→pmemf, `NprocF`→nprocf. Note that this lveinfo
+  build has **no CPU fault field at all** (no `CPUf` key) — the `cpuf`
+  metric stays 0 on servers like this; it's kept for lveinfo builds that
+  do report it, not removed, since assuming it'll never exist anywhere
+  would be its own kind of unverified guess.
 
 ## Known things to verify before trusting this in production
 

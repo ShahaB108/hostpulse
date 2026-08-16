@@ -52,13 +52,28 @@ DEFAULT_IGNORED_USERS = {
 # in the previous version. Add a new threshold metric by adding one row
 # here; nothing else needs to change.
 THRESHOLD_SPEC: List[Tuple[str, str, str, str, float, float, str]] = [
-    # (source,      metric,        env_warn_name,             env_crit_name,             default_warn, default_crit, weight_category)
-    ("lveinfo",     "pmemf",       "HOSTPULSE_PMEMF_WARNING",  "HOSTPULSE_PMEMF_CRITICAL",  50,   100,  "lve"),
-    ("lveinfo",     "nprocf",      "HOSTPULSE_NPROCF_WARNING", "HOSTPULSE_NPROCF_CRITICAL", 10,   20,   "lve"),
-    ("lveinfo",     "cpuf",        "HOSTPULSE_CPUF_WARNING",   "HOSTPULSE_CPUF_CRITICAL",   10,   20,   "lve"),
-    ("live_stats",  "cpu_percent", "HOSTPULSE_CPU_WARNING",    "HOSTPULSE_CPU_CRITICAL",    300,  400,  "process"),
-    ("live_stats",  "nproc",       "HOSTPULSE_NPROC_WARNING",  "HOSTPULSE_NPROC_CRITICAL",  15,   30,   "process"),
-    ("live_stats",  "rss_mb",      "HOSTPULSE_RSS_WARNING",    "HOSTPULSE_RSS_CRITICAL",    3072, 4096, "memory"),
+    # (source,      metric,        env_warn_name,               env_crit_name,               default_warn, default_crit, weight_category)
+    ("lveinfo",     "pmemf",       "HOSTPULSE_PMEMF_WARNING",   "HOSTPULSE_PMEMF_CRITICAL",   50,   100,  "lve"),
+    ("lveinfo",     "nprocf",      "HOSTPULSE_NPROCF_WARNING",  "HOSTPULSE_NPROCF_CRITICAL",  10,   20,   "lve"),
+    ("lveinfo",     "cpuf",        "HOSTPULSE_CPUF_WARNING",    "HOSTPULSE_CPUF_CRITICAL",    10,   20,   "lve"),
+    ("lveinfo",     "iof",         "HOSTPULSE_IOF_WARNING",     "HOSTPULSE_IOF_CRITICAL",     10,   20,   "lve"),
+    ("lveinfo",     "iopsf",       "HOSTPULSE_IOPSF_WARNING",   "HOSTPULSE_IOPSF_CRITICAL",   10,   20,   "lve"),
+    # CAVEAT: aCPU is a raw usage number from lveinfo's snapshot, not a
+    # normalized percentage -- it's only meaningful relative to that user's
+    # own plan limit (the lCPU field), which HostPulse doesn't currently
+    # read or factor in. Two users at the exact same aCPU value can be at
+    # very different fractions of their actual limit if they're on
+    # different plans. These defaults are an unvalidated flat guess (100 /
+    # 1 CPU-equivalent unit as warning, 300 / 3 CPU-equivalent units as
+    # critical going by the lCPU=500 example seen in real output) -- treat
+    # them as a placeholder to tune per server, not a calibrated value.
+    # A more correct version of this metric would compare aCPU/lCPU as a
+    # ratio instead of an absolute number; worth revisiting if this proves
+    # noisy in practice.
+    ("lveinfo",     "acpu",        "HOSTPULSE_ACPU_WARNING",    "HOSTPULSE_ACPU_CRITICAL",    100,  300,  "lve"),
+    ("live_stats",  "cpu_percent", "HOSTPULSE_CPU_WARNING",     "HOSTPULSE_CPU_CRITICAL",     300,  400,  "process"),
+    ("live_stats",  "nproc",       "HOSTPULSE_NPROC_WARNING",   "HOSTPULSE_NPROC_CRITICAL",   15,   30,   "process"),
+    ("live_stats",  "rss_mb",      "HOSTPULSE_RSS_WARNING",     "HOSTPULSE_RSS_CRITICAL",     3072, 4096, "memory"),
 ]
 
 WEIGHT_ENV_NAMES = {
