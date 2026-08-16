@@ -97,6 +97,25 @@ collector directory (e.g.
 directly in Prometheus/Grafana, alongside the JSON report for anything
 that needs the full detail (causes, per-collector status).
 
+## Design notes (why it's structured this way)
+
+- **Threshold names live in exactly one place**: `THRESHOLD_SPEC` in
+  `hostpulse.py`. Both `build_config()` and `evaluate_user()` iterate the
+  same table instead of each hardcoding the metric/env-var list separately
+  — this is what caused the env/code name mismatch in an earlier version,
+  so adding a new metric now means adding one row to the table, not
+  editing three places that have to stay in sync by hand.
+- **`HOSTPULSE_IGNORED_USERS` in the env file is additive**, not a
+  replacement for the built-in `DEFAULT_IGNORED_USERS` list in
+  `hostpulse.py`. Only list server-specific extra accounts there.
+- **`$HOSTNAME` and other `$VAR` references in `hostpulse.env` are
+  expanded** against the real OS environment (not a shell — no command
+  execution). If the variable isn't actually set in the environment this
+  script runs under (cron/systemd jobs often don't export `HOSTNAME`),
+  HostPulse detects the unresolved `$VAR` and falls back to
+  `os.uname().nodename` with a logged warning, rather than silently using
+  the literal string `"$HOSTNAME"` as the server name.
+
 ## Known things to verify before trusting this in production
 
 - `collectors/lve_faults.py`: the table parser handles several delimiter

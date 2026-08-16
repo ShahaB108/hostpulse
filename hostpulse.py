@@ -6,7 +6,8 @@ snapshot) and writing a merged JSON report, with optional Prometheus
 textfile output for node_exporter.
 
 All configuration is read from an env file (see hostpulse.env.sample).
-Real OS environment variables always take priority over the env file.
+Real OS environment variables always take priority over the env file, and
+values like $HOSTNAME are expanded against the real environment.
 """
 
 import json
@@ -15,7 +16,7 @@ import os
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, Any
+from typing import Dict, Any, List, Tuple
 
 from collectors import lve_faults
 from collectors import live_stats
@@ -42,9 +43,39 @@ DEFAULT_IGNORED_USERS = {
     "dbus", "chrony",
 }
 
+# Single source of truth for every threshold metric: which collector it
+# comes from, which key holds the raw value in the merged metrics dict,
+# the env var names for warning/critical, the default values, and which
+# scoring weight category it belongs to. build_config() and evaluate_user()
+# both read from this table instead of each hardcoding the metric list
+# separately -- that duplication is what caused the env/code name mismatch
+# in the previous version. Add a new threshold metric by adding one row
+# here; nothing else needs to change.
+THRESHOLD_SPEC: List[Tuple[str, str, str, str, float, float, str]] = [
+    # (source,      metric,        env_warn_name,             env_crit_name,             default_warn, default_crit, weight_category)
+    ("lveinfo",     "pmemf",       "HOSTPULSE_PMEMF_WARNING",  "HOSTPULSE_PMEMF_CRITICAL",  50,   100,  "lve"),
+    ("lveinfo",     "nprocf",      "HOSTPULSE_NPROCF_WARNING", "HOSTPULSE_NPROCF_CRITICAL", 10,   20,   "lve"),
+    ("lveinfo",     "cpuf",        "HOSTPULSE_CPUF_WARNING",   "HOSTPULSE_CPUF_CRITICAL",   10,   20,   "lve"),
+    ("live_stats",  "cpu_percent", "HOSTPULSE_CPU_WARNING",    "HOSTPULSE_CPU_CRITICAL",    300,  400,  "process"),
+    ("live_stats",  "nproc",       "HOSTPULSE_NPROC_WARNING",  "HOSTPULSE_NPROC_CRITICAL",  15,   30,   "process"),
+    ("live_stats",  "rss_mb",      "HOSTPULSE_RSS_WARNING",    "HOSTPULSE_RSS_CRITICAL",    3072, 4096, "memory"),
+]
+
+WEIGHT_ENV_NAMES = {
+    "lve": ("HOSTPULSE_LVE_WEIGHT", 5),
+    "process": ("HOSTPULSE_PROCESS_WEIGHT", 3),
+    "memory": ("HOSTPULSE_MEMORY_WEIGHT", 3),
+}
+
 
 def load_env_file(path: Path) -> Dict[str, str]:
-    """Load key-value pairs from a simple KEY=VALUE env file."""
+    """
+    Load key-value pairs from a simple KEY=VALUE env file.
+    Values go through os.path.expandvars(), so $HOSTNAME or ${HOSTNAME}
+    resolve against the real OS environment at load time -- this is NOT a
+    full shell, it does not run commands or expand globs, just variable
+    substitution.
+    """
     values = {}
 
     if not path.exists():
@@ -60,6 +91,7 @@ def load_env_file(path: Path) -> Dict[str, str]:
             key, value = line.split("=", 1)
             key = key.strip()
             value = value.strip().strip("\"'")
+            value = os.path.expandvars(value)
 
             values[key] = value
 
@@ -91,7 +123,12 @@ def env_float(name: str, default: float) -> float:
 
 
 def load_ignored_users() -> set:
-    """Build the set of usernames excluded from resource monitoring."""
+    """
+    Build the set of usernames excluded from resource monitoring.
+    HOSTPULSE_IGNORED_USERS in the env file is ADDED to the built-in
+    DEFAULT_IGNORED_USERS list below, not a replacement for it -- only
+    list server-specific extras there, not the whole system-account list.
+    """
     configured = env_value("HOSTPULSE_IGNORED_USERS", "")
 
     users = set(DEFAULT_IGNORED_USERS)
@@ -102,18 +139,38 @@ def load_ignored_users() -> set:
     return users
 
 
+def _resolve_server_name() -> str:
+    """
+    Resolve HOSTPULSE_SERVER_NAME, falling back to the actual system
+    hostname if it's unset, blank, or still contains an unresolved $VAR
+    reference. os.path.expandvars() silently leaves $VAR untouched if that
+    variable isn't set in the real environment (e.g. cron/systemd jobs
+    often don't export HOSTNAME) -- without this check, the server name
+    would end up as the literal string "$HOSTNAME" instead of falling back.
+    """
+    raw = env_value("HOSTPULSE_SERVER_NAME", "").strip()
+
+    if not raw or "$" in raw:
+        if raw:
+            logging.warning(
+                "HOSTPULSE_SERVER_NAME='%s' has an unresolved variable, "
+                "falling back to system hostname", raw,
+            )
+        return os.uname().nodename
+
+    return raw
+
+
 def build_config() -> Dict[str, Any]:
     """
     Build the full runtime configuration from environment variables.
-
-    NOTE: every key read here must have a matching entry in
-    hostpulse.env.sample with the exact same name, or a threshold silently
-    falls back to the hardcoded default below instead of the value the
-    user thinks they set. Keep these two files in sync.
+    Threshold values are read generically from THRESHOLD_SPEC/WEIGHT_ENV_NAMES
+    above rather than one env_float() call per metric, so the env var names
+    only ever exist in one place in the code.
     """
-    return {
+    config: Dict[str, Any] = {
         # Paths / general
-        "server_name": env_value("HOSTPULSE_SERVER_NAME", os.uname().nodename),
+        "server_name": _resolve_server_name(),
         "log_level": env_value("HOSTPULSE_LOG_LEVEL", "INFO"),
         "log_file": Path(env_value("HOSTPULSE_LOG_FILE", str(BASE_DIR / "logs" / "hostpulse.log"))),
         "json_output": Path(env_value("HOSTPULSE_JSON_OUTPUT", str(BASE_DIR / "output" / "users.json"))),
@@ -131,28 +188,24 @@ def build_config() -> Dict[str, Any]:
         ),
 
         "ignored_users": load_ignored_users(),
-
-        # LVE fault thresholds (24h window, from lveinfo)
-        "pmemf_warning": env_float("HOSTPULSE_PMEMF_WARNING", 50),
-        "pmemf_critical": env_float("HOSTPULSE_PMEMF_CRITICAL", 100),
-        "nprocf_warning": env_float("HOSTPULSE_NPROCF_WARNING", 10),
-        "nprocf_critical": env_float("HOSTPULSE_NPROCF_CRITICAL", 20),
-        "cpuf_warning": env_float("HOSTPULSE_CPUF_WARNING", 10),
-        "cpuf_critical": env_float("HOSTPULSE_CPUF_CRITICAL", 20),
-
-        # Live process snapshot thresholds
-        "cpu_warning": env_float("HOSTPULSE_CPU_WARNING", 300),
-        "cpu_critical": env_float("HOSTPULSE_CPU_CRITICAL", 400),
-        "nproc_warning": env_float("HOSTPULSE_NPROC_WARNING", 15),
-        "nproc_critical": env_float("HOSTPULSE_NPROC_CRITICAL", 30),
-        "rss_warning": env_float("HOSTPULSE_RSS_WARNING", 3072),
-        "rss_critical": env_float("HOSTPULSE_RSS_CRITICAL", 4096),
-
-        # Scoring weights (used to rank flagged users against each other)
-        "lve_weight": env_float("HOSTPULSE_LVE_WEIGHT", 5),
-        "process_weight": env_float("HOSTPULSE_PROCESS_WEIGHT", 3),
-        "memory_weight": env_float("HOSTPULSE_MEMORY_WEIGHT", 3),
+        "thresholds": {},
     }
+
+    # Read every threshold from the single spec table above.
+    for _source, metric, warn_name, crit_name, default_warn, default_crit, weight_cat in THRESHOLD_SPEC:
+        config["thresholds"][metric] = {
+            "warning": env_float(warn_name, default_warn),
+            "critical": env_float(crit_name, default_crit),
+            "weight_category": weight_cat,
+        }
+
+    # Read scoring weights per category.
+    config["weights"] = {
+        category: env_float(env_name, default)
+        for category, (env_name, default) in WEIGHT_ENV_NAMES.items()
+    }
+
+    return config
 
 
 def setup_logging(config: Dict[str, Any]) -> None:
@@ -200,54 +253,36 @@ def merge_collector_data(
 
 
 def evaluate_user(user: Dict[str, Any], config: Dict[str, Any]) -> Dict[str, Any]:
-    """Evaluate a user's merged metrics and assign severity, causes, and score."""
+    """
+    Evaluate a user's merged metrics against THRESHOLD_SPEC and assign
+    severity, causes, and score. Iterates the same spec table build_config()
+    used, so a metric's env names and defaults only ever live in one place.
+    """
     metrics = user["metrics"]
     causes = []
+    category_statuses: Dict[str, List[str]] = {}
+
+    for source, metric, _warn_name, _crit_name, _dw, _dc, weight_cat in THRESHOLD_SPEC:
+        value = float(metrics.get(metric, 0) or 0)
+        thresholds = config["thresholds"][metric]
+        status = status_for_value(value, thresholds["warning"], thresholds["critical"])
+
+        category_statuses.setdefault(weight_cat, []).append(status)
+
+        if status != "normal":
+            display_value = round(value, 2) if isinstance(value, float) else value
+            causes.append({"source": source, "metric": metric, "value": display_value, "status": status})
+
     score = 0.0
+    all_statuses = []
+    for category, statuses in category_statuses.items():
+        all_statuses.extend(statuses)
+        if "warning" in statuses or "critical" in statuses:
+            score += config["weights"].get(category, 0)
 
-    lve_statuses = []
-    for metric_name, warning_key, critical_key in (
-        ("pmemf", "pmemf_warning", "pmemf_critical"),
-        ("nprocf", "nprocf_warning", "nprocf_critical"),
-        ("cpuf", "cpuf_warning", "cpuf_critical"),
-    ):
-        value = float(metrics.get(metric_name, 0) or 0)
-        status = status_for_value(value, config[warning_key], config[critical_key])
-        lve_statuses.append(status)
-
-        if status != "normal":
-            causes.append({"source": "lveinfo", "metric": metric_name, "value": value, "status": status})
-
-    if "warning" in lve_statuses or "critical" in lve_statuses:
-        score += config["lve_weight"]
-
-    process_statuses = []
-    for metric_name, warning_key, critical_key in (
-        ("cpu_percent", "cpu_warning", "cpu_critical"),
-        ("nproc", "nproc_warning", "nproc_critical"),
-    ):
-        value = float(metrics.get(metric_name, 0) or 0)
-        status = status_for_value(value, config[warning_key], config[critical_key])
-        process_statuses.append(status)
-
-        if status != "normal":
-            causes.append({"source": "live_stats", "metric": metric_name, "value": round(value, 2), "status": status})
-
-    if "warning" in process_statuses or "critical" in process_statuses:
-        score += config["process_weight"]
-
-    memory_value = float(metrics.get("rss_mb", 0) or 0)
-    memory_status = status_for_value(memory_value, config["rss_warning"], config["rss_critical"])
-
-    if memory_status != "normal":
-        score += config["memory_weight"]
-        causes.append({"source": "live_stats", "metric": "rss_mb", "value": round(memory_value, 2), "status": memory_status})
-
-    statuses = lve_statuses + process_statuses + [memory_status]
-
-    if "critical" in statuses:
+    if "critical" in all_statuses:
         final_status = "critical"
-    elif "warning" in statuses:
+    elif "warning" in all_statuses:
         final_status = "warning"
     else:
         final_status = "normal"
@@ -327,7 +362,7 @@ def main() -> int:
     config = build_config()
     setup_logging(config)
 
-    logging.info("HostPulse collection started (env file: %s)", ENV_FILE)
+    logging.info("HostPulse collection started (env file: %s, server: %s)", ENV_FILE, config["server_name"])
 
     aggregate: Dict[str, Dict[str, Any]] = {}
     collector_stats: Dict[str, Any] = {}
