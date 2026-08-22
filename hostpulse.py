@@ -20,6 +20,7 @@ from typing import Dict, Any, List, Tuple
 
 from collectors import lve_faults
 from collectors import live_stats
+from collectors import vhost_traffic
 
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -32,6 +33,7 @@ ENV_FILE = Path(os.getenv("HOSTPULSE_ENV_FILE", str(BASE_DIR / "hostpulse.env"))
 COLLECTORS = (
     ("lveinfo", lve_faults),
     ("live_stats", live_stats),
+    ("vhost_traffic", vhost_traffic),
 )
 
 DEFAULT_IGNORED_USERS = {
@@ -74,12 +76,23 @@ THRESHOLD_SPEC: List[Tuple[str, str, str, str, float, float, str]] = [
     ("live_stats",  "cpu_percent", "HOSTPULSE_CPU_WARNING",     "HOSTPULSE_CPU_CRITICAL",     300,  400,  "process"),
     ("live_stats",  "nproc",       "HOSTPULSE_NPROC_WARNING",   "HOSTPULSE_NPROC_CRITICAL",   15,   30,   "process"),
     ("live_stats",  "rss_mb",      "HOSTPULSE_RSS_WARNING",     "HOSTPULSE_RSS_CRITICAL",     3072, 4096, "memory"),
+    # CAVEAT: requests_per_min is a delta of the exporter's cumulative
+    # per-vhost counter between this run and the previous one, normalized
+    # to requests/minute -- it's only as smooth as your cron/timer
+    # interval, and reads 0 on the very first run (nothing to diff yet).
+    # requests_per_sec_now is a single-second gauge snapshot from the
+    # exporter, same "can spike" caveat as the ps snapshot in
+    # live_stats.py. Neither is normalized against a per-domain traffic
+    # baseline -- these are unvalidated starting guesses, tune per server.
+    ("vhost_traffic", "requests_per_min",     "HOSTPULSE_VHOST_REQPM_WARNING", "HOSTPULSE_VHOST_REQPM_CRITICAL", 3000, 8000, "traffic"),
+    ("vhost_traffic", "requests_per_sec_now", "HOSTPULSE_VHOST_REQPS_WARNING", "HOSTPULSE_VHOST_REQPS_CRITICAL", 50,   150,  "traffic"),
 ]
 
 WEIGHT_ENV_NAMES = {
     "lve": ("HOSTPULSE_LVE_WEIGHT", 5),
     "process": ("HOSTPULSE_PROCESS_WEIGHT", 3),
     "memory": ("HOSTPULSE_MEMORY_WEIGHT", 3),
+    "traffic": ("HOSTPULSE_TRAFFIC_WEIGHT", 4),
 }
 
 
@@ -201,6 +214,12 @@ def build_config() -> Dict[str, Any]:
             "HOSTPULSE_PS_COMMAND",
             "ps -eo user=,pcpu=,pmem=,rss=,pid=",
         ),
+
+        # Vhost traffic collector (LiteSpeed Prometheus exporter)
+        "exporter_url": env_value("HOSTPULSE_EXPORTER_URL", "http://127.0.0.1:9936/metrics"),
+        "exporter_timeout": env_int("HOSTPULSE_EXPORTER_TIMEOUT", 15),
+        "domain_owners_file": env_value("HOSTPULSE_DOMAIN_OWNERS_FILE", "/etc/virtual/domainowners"),
+        "vhost_state_file": env_value("HOSTPULSE_VHOST_STATE_FILE", str(BASE_DIR / "state" / "vhost_traffic.json")),
 
         "ignored_users": load_ignored_users(),
         "thresholds": {},
