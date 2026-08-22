@@ -90,6 +90,25 @@ def _vhost_to_domain(vhost_label: str) -> str:
     return name.lower()
 
 
+def _lookup_owner(domain: str, owners: Dict[str, str]) -> str:
+    """
+    Look up a vhost's domain in the owners map. DirectAdmin's
+    domainowners file lists the bare registered domain (e.g.
+    "example.com"), but exporter vhost labels are the actual vhost name,
+    which is very often "www.example.com" -- so an exact match fails for
+    most www vhosts even though the domain is owned and correctly listed.
+    Try the exact name first, then retry with a leading "www." stripped.
+    """
+    owner = owners.get(domain)
+    if owner:
+        return owner
+
+    if domain.startswith("www."):
+        return owners.get(domain[len("www."):], "")
+
+    return ""
+
+
 def _fetch_metrics_text(url: str, timeout: int) -> str:
     request = urllib.request.Request(url, headers={"Accept": "text/plain"})
     with urllib.request.urlopen(request, timeout=timeout) as response:
@@ -191,7 +210,7 @@ def collect(config: Dict[str, Any]) -> Dict[str, Any]:
         requests_per_min = (delta / elapsed * 60.0) if elapsed > 0 else 0.0
         requests_per_sec_now = current_rates.get(domain, 0.0)
 
-        owner = owners.get(domain)
+        owner = _lookup_owner(domain, owners)
         if not owner or owner in ignored_users:
             continue
 
