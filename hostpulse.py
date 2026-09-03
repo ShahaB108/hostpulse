@@ -25,6 +25,12 @@ from collectors import vhost_traffic
 
 BASE_DIR = Path(__file__).resolve().parent
 
+# Single source of truth for the HostPulse version. It is included in the
+# JSON output (see write_json) so ServerHub agents can read the exact
+# version straight from output/users.json instead of guessing from file
+# mtimes or requiring git metadata. Bump this on every release.
+__version__ = "1.1.0"
+
 # The env file location itself can be overridden via a real OS environment
 # variable (set before running this script), since the script obviously
 # can't read its own path from inside the file it's about to load.
@@ -340,6 +346,7 @@ def write_json(config: Dict[str, Any], users: list, collector_stats: dict) -> No
     data = {
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "server": config["server_name"],
+        "version": __version__,
         "users": users,
         "collector_stats": collector_stats,
     }
