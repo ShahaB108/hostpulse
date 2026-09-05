@@ -216,3 +216,9 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# HostPulse runtime artifacts (never commit reports, state or secrets)
+output/
+state/
+logs/
+config/htpasswd

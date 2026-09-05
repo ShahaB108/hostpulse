@@ -1,0 +1,14 @@
+# HostPulse collector -- one-shot run that refreshes the JSON/Prometheus
+# report (hostpulse.py). Triggered by hostpulse.timer every hour; the web
+# service (hostpulse-web.service) then serves the fresh report on :35707.
+
+[Unit]
+Description=HostPulse collector run (refresh JSON report)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+WorkingDirectory=/opt/hostpulse
+ExecStart=/usr/bin/python3 /opt/hostpulse/hostpulse.py

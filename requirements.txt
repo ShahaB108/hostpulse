@@ -1,0 +1,9 @@
+# Web service dependencies (hostpulse_web.py only -- hostpulse.py and the
+# collectors stay Python-stdlib-only).
+#
+# passlib provides the htpasswd file support (apr1/MD5 hashes natively).
+# bcrypt is OPTIONAL: install it only if your htpasswd file contains
+# bcrypt hashes (generated with `htpasswd -B` or --scheme bcrypt).
+fastapi>=0.110
+uvicorn>=0.29
+passlib>=1.7.4

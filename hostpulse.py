@@ -32,7 +32,7 @@ BASE_DIR = Path(__file__).resolve().parent
 # JSON output (see write_json) so ServerHub agents can read the exact
 # version straight from output/users.json instead of guessing from file
 # mtimes or requiring git metadata. Bump this on every release.
-__version__ = "1.3.0"
+__version__ = "2.0.1"
 
 # The env file location itself can be overridden via a real OS environment
 # variable (set before running this script), since the script obviously

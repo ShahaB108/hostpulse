@@ -1,0 +1,21 @@
+# HostPulse timer -- runs the collector (hostpulse-collect.service) every
+# hour so the JSON report served by the web service stays current.
+#
+#   systemctl enable --now hostpulse.timer
+#   systemctl list-timers hostpulse.timer
+#
+# OnBootSec runs the first collection 5 minutes after boot, then
+# OnUnitActiveSec keeps it on a steady one-hour cadence (measured from the
+# collector's last activation, so servers don't all fire at :00).
+
+[Unit]
+Description=Run HostPulse collector every hour
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=1h
+AccuracySec=1min
+Unit=hostpulse-collect.service
+
+[Install]
+WantedBy=timers.target

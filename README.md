@@ -1,5 +1,7 @@
 # HostPulse
 
+[English](README.md) | [فارسی](README.fa.md)
+
 Detects high-resource-usage users on DirectAdmin + CloudLinux servers by
 running a set of collectors (LVE fault counts, live CPU/memory/process
 snapshot) and writing a merged JSON report, with optional Prometheus
@@ -7,6 +9,11 @@ textfile output for node_exporter.
 
 Python stdlib only. No pip dependencies. Intended to run as root via cron
 or a systemd timer.
+
+Everything HostPulse needs lives under its install directory
+(`/opt/hostpulse`): the code, the venv, `config/htpasswd`,
+`output/users.json`, logs and state. Only the systemd unit files go to
+`/etc/systemd/system/`.
 
 ## Install
 
@@ -59,9 +66,79 @@ Or a systemd service + timer pointed at the same command works the same
 way — a oneshot service triggered by a timer, no special setup needed
 beyond `WorkingDirectory=/opt/hostpulse`.
 
+## Web service (FastAPI, port 35707)
+
+Instead of reading `users.json` off disk, the report can be served over
+HTTP with `hostpulse_web.py` — a small FastAPI app protected by HTTP Basic
+Auth backed by an htpasswd file (this is the only part of HostPulse with
+pip dependencies; the collector itself stays stdlib-only).
+
+One-command install (creates a venv, generates the htpasswd, installs the
+systemd units and enables both the web service and the hourly timer):
+
+```bash
+sudo bash deploy/install-web.sh
+```
+
+Manual setup:
+
+```bash
+cd /opt/hostpulse
+python3 -m venv .venv
+.venv/bin/pip install -r requirements.txt
+
+# Create the htpasswd file (apr1 hashes, same format as `htpasswd -m`).
+# Default location is /opt/hostpulse/config/htpasswd:
+.venv/bin/python hostpulse_web.py --add-user admin \
+  --htpasswd /opt/hostpulse/config/htpasswd
+```
+
+Endpoints — everything except `/health` requires Basic Auth:
+
+| Endpoint         | What it serves                                             |
+|------------------|------------------------------------------------------------|
+| `GET /`          | The JSON report (same payload as `/users.json`)            |
+| `GET /users.json`| The JSON report produced by hostpulse.py                   |
+| `GET /metrics`   | Prometheus output (404 if `HOSTPULSE_PROM_OUTPUT` is empty)|
+| `GET /health`    | Unauthenticated liveness probe                             |
+
+```bash
+curl -u admin http://SERVER:35707/users.json
+curl -u admin http://SERVER:35707/metrics
+```
+
+The htpasswd file is reloaded automatically on change — adding/removing
+users never needs a restart. Web-only settings (OS environment or systemd
+drop-in on the service): `HOSTPULSE_WEB_HOST` (default `0.0.0.0`),
+`HOSTPULSE_WEB_PORT` (default `35707`), `HOSTPULSE_HTPASSWD_FILE`
+(default `/opt/hostpulse/config/htpasswd`). The JSON/Prometheus paths are read
+from the same `HOSTPULSE_JSON_OUTPUT` / `HOSTPULSE_PROM_OUTPUT` variables
+the collector uses, so the API always matches what the collectors wrote.
+
+### systemd units (web service + hourly timer)
+
+`deploy/` contains three units — enable them directly or via the install
+script above:
+
+```bash
+sudo cp deploy/hostpulse-web.service deploy/hostpulse-collect.service \
+     deploy/hostpulse.timer /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now hostpulse-web.service  # always-on API on :35707
+sudo systemctl enable --now hostpulse.timer        # refresh report every hour
+systemctl list-timers hostpulse.timer
+```
+
+- `hostpulse-web.service` — long-running uvicorn process; the API must be
+  reachable at all times, so this unit stays up and restarts on failure.
+- `hostpulse-collect.service` + `hostpulse.timer` — the timer fires every
+  hour (`OnBootSec=5min`, `OnUnitActiveSec=1h`) and runs the collector as
+  root, which rewrites `users.json`; the web service then serves the
+  fresh data. Check with `journalctl -u hostpulse-collect.service`.
+
 ## Output
 
-Written to `HOSTPULSE_JSON_OUTPUT` (default `output/users.json`):
+Written to `HOSTPULSE_JSON_OUTPUT` (default `/opt/hostpulse/output/users.json`):
 
 ```json
 {

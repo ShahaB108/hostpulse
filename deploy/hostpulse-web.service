@@ -1,0 +1,38 @@
+# HostPulse web service -- always-on FastAPI JSON API on port 35707.
+#
+# Install: copy to /etc/systemd/system/hostpulse-web.service, then:
+#   systemctl daemon-reload && systemctl enable --now hostpulse-web.service
+#
+# ExecStart assumes the venv layout created by deploy/install-web.sh
+# (/opt/hostpulse/.venv). If you installed requirements system-wide,
+# change ExecStart to: /usr/bin/python3 -m uvicorn hostpulse_web:app ...
+#
+# To override settings (port, bind host, JSON path, htpasswd path) without
+# editing this file, use a drop-in:
+#   systemctl edit hostpulse-web.service
+#   [Service]
+#   Environment=HOSTPULSE_WEB_PORT=35707
+#   Environment=HOSTPULSE_HTPASSWD_FILE=/opt/hostpulse/config/htpasswd
+
+[Unit]
+Description=HostPulse web service (FastAPI JSON API on port 35707)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/hostpulse
+ExecStart=/opt/hostpulse/.venv/bin/python -m uvicorn hostpulse_web:app --host 0.0.0.0 --port 35707
+Restart=on-failure
+RestartSec=5
+
+# Hardening: config/htpasswd and report files must stay readable; if you
+# move the JSON output under /root, relax ProtectHome accordingly.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=read-only
+
+[Install]
+WantedBy=multi-user.target
