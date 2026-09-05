@@ -21,7 +21,10 @@ from typing import Dict, Any, List, Tuple
 from collectors import lve_faults
 from collectors import live_stats
 from collectors import vhost_traffic
+from collectors import lve_db_stats
+from collectors import email_usage
 
+from collectors.utils import resolve_username
 
 BASE_DIR = Path(__file__).resolve().parent
 
@@ -29,7 +32,7 @@ BASE_DIR = Path(__file__).resolve().parent
 # JSON output (see write_json) so ServerHub agents can read the exact
 # version straight from output/users.json instead of guessing from file
 # mtimes or requiring git metadata. Bump this on every release.
-__version__ = "1.1.0"
+__version__ = "1.2.0"
 
 # The env file location itself can be overridden via a real OS environment
 # variable (set before running this script), since the script obviously
@@ -40,6 +43,8 @@ COLLECTORS = (
     ("lveinfo", lve_faults),
     ("live_stats", live_stats),
     ("vhost_traffic", vhost_traffic),
+    ("lve_db_stats", lve_db_stats),
+    ("email_usage", email_usage),
 )
 
 DEFAULT_IGNORED_USERS = {
@@ -78,7 +83,8 @@ THRESHOLD_SPEC: List[Tuple[str, str, str, str, float, float, str]] = [
     # A more correct version of this metric would compare aCPU/lCPU as a
     # ratio instead of an absolute number; worth revisiting if this proves
     # noisy in practice.
-    ("lveinfo",     "acpu",        "HOSTPULSE_ACPU_WARNING",    "HOSTPULSE_ACPU_CRITICAL",    100,  300,  "lve"),
+    #("lveinfo",     "acpu",        "HOSTPULSE_ACPU_WARNING",    "HOSTPULSE_ACPU_CRITICAL",    100,  300,  "lve"),
+    ("lveinfo",     "acpu",        "HOSTPULSE_ACPU_WARNING",    "HOSTPULSE_ACPU_CRITICAL",    70,   90,   "lve"),
     ("live_stats",  "cpu_percent", "HOSTPULSE_CPU_WARNING",     "HOSTPULSE_CPU_CRITICAL",     300,  400,  "process"),
     ("live_stats",  "nproc",       "HOSTPULSE_NPROC_WARNING",   "HOSTPULSE_NPROC_CRITICAL",   15,   30,   "process"),
     ("live_stats",  "rss_mb",      "HOSTPULSE_RSS_WARNING",     "HOSTPULSE_RSS_CRITICAL",     3072, 4096, "memory"),
@@ -92,6 +98,12 @@ THRESHOLD_SPEC: List[Tuple[str, str, str, str, float, float, str]] = [
     # baseline -- these are unvalidated starting guesses, tune per server.
     ("vhost_traffic", "requests_per_min",     "HOSTPULSE_VHOST_REQPM_WARNING", "HOSTPULSE_VHOST_REQPM_CRITICAL", 3000, 8000, "traffic"),
     ("vhost_traffic", "requests_per_sec_now", "HOSTPULSE_VHOST_REQPS_WARNING", "HOSTPULSE_VHOST_REQPS_CRITICAL", 50,   150,  "traffic"),
+    # DataBase Usage
+    ("lve_db_stats", "db_peak_cpu",       "HOSTPULSE_DB_PEAK_CPU_WARNING", "HOSTPULSE_DB_PEAK_CPU_CRITICAL", 40, 70, "database"),
+    ("lve_db_stats", "db_avg_cpu",        "HOSTPULSE_DB_AVG_CPU_WARNING",  "HOSTPULSE_DB_AVG_CPU_CRITICAL",  5,  15, "database"),
+    ("lve_db_stats", "db_total_write_mb", "HOSTPULSE_DB_WRITE_MB_WARNING", "HOSTPULSE_DB_WRITE_MB_CRITICAL", 50, 100, "database"),
+    # Email usage
+    ("email_usage", "email_count", "HOSTPULSE_EMAIL_WARNING", "HOSTPULSE_EMAIL_CRITICAL", 160, 200, "email"),
 ]
 
 WEIGHT_ENV_NAMES = {
@@ -99,6 +111,8 @@ WEIGHT_ENV_NAMES = {
     "process": ("HOSTPULSE_PROCESS_WEIGHT", 3),
     "memory": ("HOSTPULSE_MEMORY_WEIGHT", 3),
     "traffic": ("HOSTPULSE_TRAFFIC_WEIGHT", 4),
+    "database": ("HOSTPULSE_DATABASE_WEIGHT", 4),
+    "email": ("HOSTPULSE_EMAIL_WEIGHT", 2),
 }
 
 
@@ -130,7 +144,6 @@ def load_env_file(path: Path) -> Dict[str, str]:
             values[key] = value
 
     return values
-
 
 ENV = load_env_file(ENV_FILE)
 
@@ -202,6 +215,12 @@ def build_config() -> Dict[str, Any]:
     above rather than one env_float() call per metric, so the env var names
     only ever exist in one place in the code.
     """
+    server_name = _resolve_server_name()
+    is_mailservice = server_name.lower().startswith("mailservice")
+    # Limit check: 2000 for mailservice hostnames, 200 for normal hostnames
+    default_email_crit = 2000.0 if is_mailservice else 200.0
+    default_email_warn = default_email_crit * 0.8  # 80% limit warning threshold (1600 or 160)
+
     config: Dict[str, Any] = {
         # Paths / general
         "server_name": _resolve_server_name(),
@@ -209,6 +228,10 @@ def build_config() -> Dict[str, Any]:
         "log_file": Path(env_value("HOSTPULSE_LOG_FILE", str(BASE_DIR / "logs" / "hostpulse.log"))),
         "json_output": Path(env_value("HOSTPULSE_JSON_OUTPUT", str(BASE_DIR / "output" / "users.json"))),
         "prom_output": env_value("HOSTPULSE_PROM_OUTPUT", ""),
+        # Database collector
+        "lve_db_path": env_value("HOSTPULSE_LVE_DB_PATH", "/var/lve/lvestats2.db"),
+        # Email collector path
+        "email_usage_path": env_value("HOSTPULSE_EMAIL_USAGE_PATH", "/etc/virtual/usage"),
 
         # Commands
         "command_timeout": env_int("HOSTPULSE_COMMAND_TIMEOUT", 120),
@@ -233,6 +256,10 @@ def build_config() -> Dict[str, Any]:
 
     # Read every threshold from the single spec table above.
     for _source, metric, warn_name, crit_name, default_warn, default_crit, weight_cat in THRESHOLD_SPEC:
+        if metric == "email_count":
+            default_warn = default_email_warn
+            default_crit = default_email_crit
+
         config["thresholds"][metric] = {
             "warning": env_float(warn_name, default_warn),
             "critical": env_float(crit_name, default_crit),
@@ -280,7 +307,8 @@ def merge_collector_data(
     collector_result: Dict[str, Any],
 ) -> None:
     """Merge metrics collected from a single collector into the aggregate."""
-    for username, metrics in collector_result.get("users", {}).items():
+    for raw_user, metrics in collector_result.get("users", {}).items():
+        username = resolve_username(raw_user)
         if username not in aggregate:
             aggregate[username] = {
                 "username": username,
@@ -302,10 +330,26 @@ def evaluate_user(user: Dict[str, Any], config: Dict[str, Any]) -> Dict[str, Any
     causes = []
     category_statuses: Dict[str, List[str]] = {}
 
+    #for source, metric, _warn_name, _crit_name, _dw, _dc, weight_cat in THRESHOLD_SPEC:
+    #    value = float(metrics.get(metric, 0) or 0)
+    #    thresholds = config["thresholds"][metric]
+    #    status = status_for_value(value, thresholds["warning"], thresholds["critical"])
+    #    category_statuses.setdefault(weight_cat, []).append(status)
     for source, metric, _warn_name, _crit_name, _dw, _dc, weight_cat in THRESHOLD_SPEC:
         value = float(metrics.get(metric, 0) or 0)
         thresholds = config["thresholds"][metric]
-        status = status_for_value(value, thresholds["warning"], thresholds["critical"])
+
+        if metric == "acpu":
+            lcpu = float(metrics.get("lcpu", 0) or 0)
+            if lcpu > 0:
+                warn_val = lcpu * (thresholds["warning"] / 100.0)
+                crit_val = lcpu * (thresholds["critical"] / 100.0)
+                status = status_for_value(value, warn_val, crit_val)
+            else:
+                #status = status_for_value(value, thresholds["warning"], thresholds["critical"])
+                status = "normal"
+        else:
+            status = status_for_value(value, thresholds["warning"], thresholds["critical"])
 
         category_statuses.setdefault(weight_cat, []).append(status)
 
@@ -436,7 +480,8 @@ def main() -> int:
         if evaluated["status"] != "normal":
             evaluated_users.append(evaluated)
 
-    evaluated_users.sort(key=lambda item: (-item["score"], item["username"]))
+    #evaluated_users.sort(key=lambda item: (-item["score"], item["username"])) #sharifi
+    evaluated_users.sort(key=lambda item: (-item["score"], str(item["username"])))
 
     write_json(config, evaluated_users, collector_stats)
     write_prometheus(config, evaluated_users)
