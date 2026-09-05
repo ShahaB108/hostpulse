@@ -32,7 +32,7 @@ BASE_DIR = Path(__file__).resolve().parent
 # JSON output (see write_json) so ServerHub agents can read the exact
 # version straight from output/users.json instead of guessing from file
 # mtimes or requiring git metadata. Bump this on every release.
-__version__ = "1.2.0"
+__version__ = "1.3.0"
 
 # The env file location itself can be overridden via a real OS environment
 # variable (set before running this script), since the script obviously
@@ -66,26 +66,19 @@ DEFAULT_IGNORED_USERS = {
 # here; nothing else needs to change.
 THRESHOLD_SPEC: List[Tuple[str, str, str, str, float, float, str]] = [
     # (source,      metric,        env_warn_name,               env_crit_name,               default_warn, default_crit, weight_category)
-    ("lveinfo",     "pmemf",       "HOSTPULSE_PMEMF_WARNING",   "HOSTPULSE_PMEMF_CRITICAL",   50,   100,  "lve"),
-    ("lveinfo",     "nprocf",      "HOSTPULSE_NPROCF_WARNING",  "HOSTPULSE_NPROCF_CRITICAL",  10,   20,   "lve"),
-    ("lveinfo",     "cpuf",        "HOSTPULSE_CPUF_WARNING",    "HOSTPULSE_CPUF_CRITICAL",    10,   20,   "lve"),
-    ("lveinfo",     "iof",         "HOSTPULSE_IOF_WARNING",     "HOSTPULSE_IOF_CRITICAL",     10,   20,   "lve"),
-    ("lveinfo",     "iopsf",       "HOSTPULSE_IOPSF_WARNING",   "HOSTPULSE_IOPSF_CRITICAL",   10,   20,   "lve"),
-    # CAVEAT: aCPU is a raw usage number from lveinfo's snapshot, not a
-    # normalized percentage -- it's only meaningful relative to that user's
-    # own plan limit (the lCPU field), which HostPulse doesn't currently
-    # read or factor in. Two users at the exact same aCPU value can be at
-    # very different fractions of their actual limit if they're on
-    # different plans. These defaults are an unvalidated flat guess (100 /
-    # 1 CPU-equivalent unit as warning, 300 / 3 CPU-equivalent units as
-    # critical going by the lCPU=500 example seen in real output) -- treat
-    # them as a placeholder to tune per server, not a calibrated value.
-    # A more correct version of this metric would compare aCPU/lCPU as a
-    # ratio instead of an absolute number; worth revisiting if this proves
-    # noisy in practice.
-    #("lveinfo",     "acpu",        "HOSTPULSE_ACPU_WARNING",    "HOSTPULSE_ACPU_CRITICAL",    100,  300,  "lve"),
+    ("lveinfo",     "pmemf",       "HOSTPULSE_PMEMF_WARNING",   "HOSTPULSE_PMEMF_CRITICAL",   15,   30,   "lve"),
+    ("lveinfo",     "nprocf",      "HOSTPULSE_NPROCF_WARNING",  "HOSTPULSE_NPROCF_CRITICAL",  15,   30,   "lve"),
+    ("lveinfo",     "cpuf",        "HOSTPULSE_CPUF_WARNING",    "HOSTPULSE_CPUF_CRITICAL",    15,   30,   "lve"),
+    ("lveinfo",     "iof",         "HOSTPULSE_IOF_WARNING",     "HOSTPULSE_IOF_CRITICAL",     15,   30,   "lve"),
+    ("lveinfo",     "iopsf",       "HOSTPULSE_IOPSF_WARNING",   "HOSTPULSE_IOPSF_CRITICAL",   15,   30,   "lve"),
+    # aCPU and cpu_percent are both CPU-usage numbers (100 = 1 core), so
+    # they are evaluated as a PERCENTAGE of that user's own LVE CPU limit
+    # (the lCPU field collected by lve_faults), not against an absolute
+    # number -- two users at the same raw usage can be at very different
+    # fractions of their actual limit if they're on different plans. See
+    # LCPU_PERCENT_METRICS below for how the evaluation works.
     ("lveinfo",     "acpu",        "HOSTPULSE_ACPU_WARNING",    "HOSTPULSE_ACPU_CRITICAL",    70,   90,   "lve"),
-    ("live_stats",  "cpu_percent", "HOSTPULSE_CPU_WARNING",     "HOSTPULSE_CPU_CRITICAL",     300,  400,  "process"),
+    ("live_stats",  "cpu_percent", "HOSTPULSE_CPU_WARNING",     "HOSTPULSE_CPU_CRITICAL",     70,   90,   "process"),
     ("live_stats",  "nproc",       "HOSTPULSE_NPROC_WARNING",   "HOSTPULSE_NPROC_CRITICAL",   15,   30,   "process"),
     ("live_stats",  "rss_mb",      "HOSTPULSE_RSS_WARNING",     "HOSTPULSE_RSS_CRITICAL",     3072, 4096, "memory"),
     # CAVEAT: requests_per_min is a delta of the exporter's cumulative
@@ -94,24 +87,30 @@ THRESHOLD_SPEC: List[Tuple[str, str, str, str, float, float, str]] = [
     # interval, and reads 0 on the very first run (nothing to diff yet).
     # requests_per_sec_now is a single-second gauge snapshot from the
     # exporter, same "can spike" caveat as the ps snapshot in
-    # live_stats.py. Neither is normalized against a per-domain traffic
-    # baseline -- these are unvalidated starting guesses, tune per server.
-    ("vhost_traffic", "requests_per_min",     "HOSTPULSE_VHOST_REQPM_WARNING", "HOSTPULSE_VHOST_REQPM_CRITICAL", 3000, 8000, "traffic"),
-    ("vhost_traffic", "requests_per_sec_now", "HOSTPULSE_VHOST_REQPS_WARNING", "HOSTPULSE_VHOST_REQPS_CRITICAL", 50,   150,  "traffic"),
+    # live_stats.py.
+    ("vhost_traffic", "requests_per_min",     "HOSTPULSE_VHOST_REQPM_WARNING", "HOSTPULSE_VHOST_REQPM_CRITICAL", 1000, 3000, "traffic"),
+    ("vhost_traffic", "requests_per_sec_now", "HOSTPULSE_VHOST_REQPS_WARNING", "HOSTPULSE_VHOST_REQPS_CRITICAL", 50,   120,  "traffic"),
     # DataBase Usage
-    ("lve_db_stats", "db_peak_cpu",       "HOSTPULSE_DB_PEAK_CPU_WARNING", "HOSTPULSE_DB_PEAK_CPU_CRITICAL", 40, 70, "database"),
-    ("lve_db_stats", "db_avg_cpu",        "HOSTPULSE_DB_AVG_CPU_WARNING",  "HOSTPULSE_DB_AVG_CPU_CRITICAL",  5,  15, "database"),
-    ("lve_db_stats", "db_total_write_mb", "HOSTPULSE_DB_WRITE_MB_WARNING", "HOSTPULSE_DB_WRITE_MB_CRITICAL", 50, 100, "database"),
+    ("lve_db_stats", "db_peak_cpu",       "HOSTPULSE_DB_PEAK_CPU_WARNING", "HOSTPULSE_DB_PEAK_CPU_CRITICAL", 150, 300, "database"),
+    ("lve_db_stats", "db_avg_cpu",        "HOSTPULSE_DB_AVG_CPU_WARNING",  "HOSTPULSE_DB_AVG_CPU_CRITICAL",  100, 200, "database"),
+    ("lve_db_stats", "db_total_write_mb", "HOSTPULSE_DB_WRITE_MB_WARNING", "HOSTPULSE_DB_WRITE_MB_CRITICAL", 10,  20,  "database"),
     # Email usage
     ("email_usage", "email_count", "HOSTPULSE_EMAIL_WARNING", "HOSTPULSE_EMAIL_CRITICAL", 160, 200, "email"),
 ]
 
+# Metrics whose warning/critical values are percentages of the user's own
+# LVE CPU limit (lCPU, where 100 = 1 core) rather than absolute numbers.
+# evaluate_user() multiplies lCPU by the threshold percentage; when lCPU
+# is unknown (lveinfo failed or the field is missing), the metric is
+# treated as "normal" instead of guessing a limit.
+LCPU_PERCENT_METRICS = {"acpu", "cpu_percent"}
+
 WEIGHT_ENV_NAMES = {
     "lve": ("HOSTPULSE_LVE_WEIGHT", 5),
-    "process": ("HOSTPULSE_PROCESS_WEIGHT", 3),
-    "memory": ("HOSTPULSE_MEMORY_WEIGHT", 3),
-    "traffic": ("HOSTPULSE_TRAFFIC_WEIGHT", 4),
-    "database": ("HOSTPULSE_DATABASE_WEIGHT", 4),
+    "process": ("HOSTPULSE_PROCESS_WEIGHT", 4),
+    "memory": ("HOSTPULSE_MEMORY_WEIGHT", 4),
+    "traffic": ("HOSTPULSE_TRAFFIC_WEIGHT", 3),
+    "database": ("HOSTPULSE_DATABASE_WEIGHT", 3),
     "email": ("HOSTPULSE_EMAIL_WEIGHT", 2),
 }
 
@@ -330,23 +329,20 @@ def evaluate_user(user: Dict[str, Any], config: Dict[str, Any]) -> Dict[str, Any
     causes = []
     category_statuses: Dict[str, List[str]] = {}
 
-    #for source, metric, _warn_name, _crit_name, _dw, _dc, weight_cat in THRESHOLD_SPEC:
-    #    value = float(metrics.get(metric, 0) or 0)
-    #    thresholds = config["thresholds"][metric]
-    #    status = status_for_value(value, thresholds["warning"], thresholds["critical"])
-    #    category_statuses.setdefault(weight_cat, []).append(status)
     for source, metric, _warn_name, _crit_name, _dw, _dc, weight_cat in THRESHOLD_SPEC:
         value = float(metrics.get(metric, 0) or 0)
         thresholds = config["thresholds"][metric]
 
-        if metric == "acpu":
+        if metric in LCPU_PERCENT_METRICS:
+            # Percentage-of-plan metric: compare usage against the user's
+            # own LVE CPU limit (lCPU). Without a known lCPU the check
+            # can't be evaluated, so the metric counts as "normal".
             lcpu = float(metrics.get("lcpu", 0) or 0)
             if lcpu > 0:
                 warn_val = lcpu * (thresholds["warning"] / 100.0)
                 crit_val = lcpu * (thresholds["critical"] / 100.0)
                 status = status_for_value(value, warn_val, crit_val)
             else:
-                #status = status_for_value(value, thresholds["warning"], thresholds["critical"])
                 status = "normal"
         else:
             status = status_for_value(value, thresholds["warning"], thresholds["critical"])
@@ -480,7 +476,6 @@ def main() -> int:
         if evaluated["status"] != "normal":
             evaluated_users.append(evaluated)
 
-    #evaluated_users.sort(key=lambda item: (-item["score"], item["username"])) #sharifi
     evaluated_users.sort(key=lambda item: (-item["score"], str(item["username"])))
 
     write_json(config, evaluated_users, collector_stats)
