@@ -77,6 +77,10 @@ python3 -m collectors.live_stats
 sudo bash deploy/install-web.sh
 ```
 
+اسکریپت تشخیص می‌دهد که از داخل خود دایرکتوری نصب اجرا شده (مثلاً بعد از
+کپی ریپو در سرور: `cd /opt/hostpulse && bash deploy/install-web.sh`) و در
+آن حالت با خیال راحت کپی فایل‌ها را رد می‌کند.
+
 نصب دستی:
 
 ```bash

@@ -17,17 +17,35 @@ if [ "$(id -u)" -ne 0 ]; then
   exit 1
 fi
 
-echo "==> Installing application files to ${INSTALL_DIR}"
-mkdir -p "${INSTALL_DIR}"
-cp -r "${REPO_DIR}/collectors" "${INSTALL_DIR}/"
-cp "${REPO_DIR}/hostpulse.py" "${REPO_DIR}/hostpulse_web.py" "${REPO_DIR}/requirements.txt" "${INSTALL_DIR}/"
+# The repo may already live in the install directory (e.g. it was copied or
+# cloned straight to /opt/hostpulse and this script is run from there). In
+# that case copying files onto themselves fails with GNU cp's "same file"
+# error, so skip the copy entirely -- the files are already in place.
+if [ "${REPO_DIR}" = "${INSTALL_DIR}" ]; then
+  echo "==> Source directory is the install directory (${INSTALL_DIR}) -- skipping file copy"
+else
+  echo "==> Installing application files to ${INSTALL_DIR}"
+  mkdir -p "${INSTALL_DIR}/collectors"
+  cp -f "${REPO_DIR}/hostpulse.py" "${REPO_DIR}/hostpulse_web.py" \
+        "${REPO_DIR}/requirements.txt" "${INSTALL_DIR}/"
+  # Merge-copy (cp -a src/. dst/) so an existing collectors/ directory is
+  # updated in place instead of nested as collectors/collectors.
+  cp -a "${REPO_DIR}/collectors/." "${INSTALL_DIR}/collectors/"
+  rm -rf "${INSTALL_DIR}/collectors/__pycache__"
+fi
+
 if [ ! -f "${INSTALL_DIR}/hostpulse.env" ]; then
   cp "${REPO_DIR}/hostpulse.env.sample" "${INSTALL_DIR}/hostpulse.env"
   echo "    Created ${INSTALL_DIR}/hostpulse.env from the sample -- review it."
 fi
 
 echo "==> Creating virtualenv and installing Python dependencies"
-python3 -m venv "${INSTALL_DIR}/.venv"
+if ! python3 -m venv "${INSTALL_DIR}/.venv"; then
+  echo "ERROR: 'python3 -m venv' failed (ensurepip missing?)." >&2
+  echo "       Debian/Ubuntu: apt install python3-venv" >&2
+  echo "       RHEL/CloudLinux: dnf install python3" >&2
+  exit 1
+fi
 "${INSTALL_DIR}/.venv/bin/pip" install --upgrade pip >/dev/null
 "${INSTALL_DIR}/.venv/bin/pip" install -r "${INSTALL_DIR}/requirements.txt"
 

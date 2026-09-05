@@ -80,6 +80,10 @@ systemd units and enables both the web service and the hourly timer):
 sudo bash deploy/install-web.sh
 ```
 
+The script detects when it is being run from the install directory itself
+(e.g. `cd /opt/hostpulse && bash deploy/install-web.sh`, after copying the
+repo there) and safely skips the file copy in that case.
+
 Manual setup:
 
 ```bash
