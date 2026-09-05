@@ -32,7 +32,7 @@ BASE_DIR = Path(__file__).resolve().parent
 # JSON output (see write_json) so ServerHub agents can read the exact
 # version straight from output/users.json instead of guessing from file
 # mtimes or requiring git metadata. Bump this on every release.
-__version__ = "2.0.1"
+__version__ = "2.1.0"
 
 # The env file location itself can be overridden via a real OS environment
 # variable (set before running this script), since the script obviously
@@ -324,10 +324,17 @@ def evaluate_user(user: Dict[str, Any], config: Dict[str, Any]) -> Dict[str, Any
     Evaluate a user's merged metrics against THRESHOLD_SPEC and assign
     severity, causes, and score. Iterates the same spec table build_config()
     used, so a metric's env names and defaults only ever live in one place.
+
+    Scoring is PER CAUSE: every individual metric that crossed a warning or
+    critical threshold adds its category's weight exactly once (the
+    weight_category column of THRESHOLD_SPEC). A user flagged for two LVE
+    metrics (e.g. pmemf and nprocf) therefore scores 2x the lve weight --
+    not 1x, as with the old per-category scoring.
     """
     metrics = user["metrics"]
     causes = []
-    category_statuses: Dict[str, List[str]] = {}
+    score = 0.0
+    all_statuses: List[str] = []
 
     for source, metric, _warn_name, _crit_name, _dw, _dc, weight_cat in THRESHOLD_SPEC:
         value = float(metrics.get(metric, 0) or 0)
@@ -347,18 +354,13 @@ def evaluate_user(user: Dict[str, Any], config: Dict[str, Any]) -> Dict[str, Any
         else:
             status = status_for_value(value, thresholds["warning"], thresholds["critical"])
 
-        category_statuses.setdefault(weight_cat, []).append(status)
+        all_statuses.append(status)
 
         if status != "normal":
             display_value = round(value, 2) if isinstance(value, float) else value
             causes.append({"source": source, "metric": metric, "value": display_value, "status": status})
-
-    score = 0.0
-    all_statuses = []
-    for category, statuses in category_statuses.items():
-        all_statuses.extend(statuses)
-        if "warning" in statuses or "critical" in statuses:
-            score += config["weights"].get(category, 0)
+            # Every individual cause contributes its category's weight once.
+            score += config["weights"].get(weight_cat, 0)
 
     if "critical" in all_statuses:
         final_status = "critical"

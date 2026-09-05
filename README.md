@@ -169,6 +169,10 @@ Written to `HOSTPULSE_JSON_OUTPUT` (default `/opt/hostpulse/output/users.json`):
 Only users that crossed at least one warning/critical threshold are
 included — this is a flagged-users report, not a full inventory.
 
+Scoring is per cause (since v2.1.0): every individual metric that crossed
+a warning/critical threshold adds its category's weight once, so a user
+flagged for two LVE metrics scores twice the `lve` weight.
+
 ## Feeding this into Grafana
 
 Set `HOSTPULSE_PROM_OUTPUT` to a path inside node_exporter's textfile
