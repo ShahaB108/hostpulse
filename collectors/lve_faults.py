@@ -52,6 +52,10 @@ JSON_FIELD_CANDIDATES = {
     # on aCPU alone doesn't account for that -- see THRESHOLD_SPEC comment
     # in hostpulse.py for the caveat on this metric specifically.
     "acpu": ("aCPU", "acpu"),
+    # lCPU is the user's LVE CPU limit (100 = 1 core). It is not a usage
+    # metric itself; hostpulse.py evaluates acpu/cpu_percent as a
+    # percentage of it (see LCPU_PERCENT_METRICS there).
+    "lcpu": ("lCPU", "lcpu", "LCPU"),
 }
 
 
@@ -142,7 +146,7 @@ def _find_header(lines):
     contain at least two recognized column names. This avoids depending
     on a fixed header line number, which varies across lveinfo output.
     """
-    known_columns = {"id", "user", "username", "login", "pmemf", "nprocf", "cpuf"}
+    known_columns = {"id", "user", "username", "login", "pmemf", "nprocf", "cpuf", "acpu", "lcpu"}
 
     for index, line in enumerate(lines):
         columns = _split_table_line(line)
@@ -233,6 +237,8 @@ def parse_lveinfo_table(output: str) -> Dict[str, Dict[str, Any]]:
             "pmemf": _to_number(row.get("pmemf") or row.get("pmem") or row.get("pmemfault")),
             "nprocf": _to_number(row.get("nprocf") or row.get("nproc") or row.get("nprocfault")),
             "cpuf": _to_number(row.get("cpuf") or row.get("cpu") or row.get("cpufault")),
+            "acpu": _to_number(row.get("acpu")),
+            "lcpu": _to_number(row.get("lcpu")),
         }
 
     return users
