@@ -178,9 +178,22 @@ flagged for two LVE metrics scores twice the `lve` weight.
 Set `HOSTPULSE_PROM_OUTPUT` to a path inside node_exporter's textfile
 collector directory (e.g.
 `/var/lib/node_exporter/textfile_collector/hostpulse.prom`) to get
-`hostpulse_user_score`, `hostpulse_user_status`, and per-metric gauges
-directly in Prometheus/Grafana, alongside the JSON report for anything
-that needs the full detail (causes, per-collector status).
+`hostpulse_user_score`, `hostpulse_user_status`, per-metric gauges, and
+per-user cause detail directly in Prometheus/Grafana. Since v2.2.0 every
+cause (the JSON report's `causes` list) is exported as its own series, so
+the `.prom` file alone answers "why is this user flagged":
+
+```text
+hostpulse_user_cause{username="u",source="lveinfo",metric="pmemf",status="critical"} 62
+hostpulse_user_cause_threshold{username="u",source="lveinfo",metric="pmemf",level="warning"} 15
+hostpulse_user_cause_threshold{username="u",source="lveinfo",metric="pmemf",level="critical"} 30
+hostpulse_user_cause_count{username="u"} 1
+```
+
+The `level` threshold series is exported per cause because the
+lCPU-percentage metrics (`acpu`, `cpu_percent`) and the hostname-based
+email limits make thresholds differ per user. Only per-collector status
+still requires the JSON report.
 
 ## Design notes (why it's structured this way)
 

@@ -32,7 +32,7 @@ BASE_DIR = Path(__file__).resolve().parent
 # JSON output (see write_json) so ServerHub agents can read the exact
 # version straight from output/users.json instead of guessing from file
 # mtimes or requiring git metadata. Bump this on every release.
-__version__ = "2.1.0"
+__version__ = "2.2.0"
 
 # The env file location itself can be overridden via a real OS environment
 # variable (set before running this script), since the script obviously
@@ -409,7 +409,25 @@ def prometheus_escape(value: str) -> str:
 
 
 def write_prometheus(config: Dict[str, Any], users: list) -> None:
-    """Write user metrics in Prometheus text exposition format, if enabled."""
+    """
+    Write user metrics in Prometheus text exposition format, if enabled.
+
+    Besides the score/status gauges and the raw per-metric gauges, the
+    per-user cause detail (the JSON report's "causes" list) is exported
+    as its own series since v2.2.0, so the .prom file alone answers
+    "why is this user flagged" without the JSON report:
+
+      hostpulse_user_cause{username,source,metric,status} <value>
+          one series per metric that crossed a warning/critical
+          threshold; the value is the offending metric's value.
+      hostpulse_user_cause_threshold{username,source,metric,level} <value>
+          the warning/critical thresholds of that breached metric.
+          Exported per user because the lCPU-percentage metrics
+          (acpu, cpu_percent) and the hostname-based email limits
+          differ from user to user.
+      hostpulse_user_cause_count{username} <n>
+          number of individual threshold breaches for the user.
+    """
     prom_output = str(config.get("prom_output", "")).strip()
 
     if not prom_output:
@@ -417,7 +435,9 @@ def write_prometheus(config: Dict[str, Any], users: list) -> None:
         return
 
     status_to_int = {"normal": 0, "warning": 1, "critical": 2}
-    lines = []
+    lines: List[str] = []
+    saw_cause = False       # any hostpulse_user_cause sample written?
+    saw_threshold = False   # any hostpulse_user_cause_threshold sample written?
 
     for user in users:
         username = prometheus_escape(user["username"])
@@ -430,12 +450,74 @@ def write_prometheus(config: Dict[str, Any], users: list) -> None:
             if isinstance(metric_value, (int, float)):
                 lines.append("hostpulse_user_{}{{{}}} {}".format(metric_name, labels, metric_value))
 
+        # Cause detail: mirror the JSON report's "causes" list -- one
+        # series per threshold breach, plus the thresholds that were
+        # crossed so dashboards can render value-vs-threshold without
+        # the JSON report.
+        causes = user.get("causes") or []
+        for cause in causes:
+            cause_labels = 'username="{}",source="{}",metric="{}"'.format(
+                username,
+                prometheus_escape(cause.get("source", "unknown")),
+                prometheus_escape(cause.get("metric", "unknown")),
+            )
+            status_label = 'status="{}"'.format(prometheus_escape(cause.get("status", "warning")))
+
+            lines.append(
+                "hostpulse_user_cause{{{},{}}} {}".format(
+                    cause_labels, status_label, cause.get("value", 0),
+                )
+            )
+            saw_cause = True
+
+            thresholds = config["thresholds"].get(cause.get("metric", ""), {})
+            for level in ("warning", "critical"):
+                if level in thresholds:
+                    lines.append(
+                        "hostpulse_user_cause_threshold{{{},{}}} {}".format(
+                            cause_labels, 'level="{}"'.format(level), thresholds[level],
+                        )
+                    )
+                    saw_threshold = True
+
+        lines.append(
+            "hostpulse_user_cause_count{{{}}} {}".format(labels, len(causes))
+        )
+
+    # HELP/TYPE comments are optional in the text format but make the
+    # fixed families self-describing in Grafana. They must appear before
+    # a family's first sample, so the header is prepended after the body
+    # is built and only for families that actually have samples here.
+    header: List[str] = []
+
+    if users:
+        header.extend([
+            "# HELP hostpulse_user_score Aggregated urgency score for a flagged user (sum of per-cause category weights).",
+            "# TYPE hostpulse_user_score gauge",
+            "# HELP hostpulse_user_status User severity as a number: 0 normal, 1 warning, 2 critical.",
+            "# TYPE hostpulse_user_status gauge",
+            "# HELP hostpulse_user_cause_count Number of warning/critical threshold breaches (causes) found for the user.",
+            "# TYPE hostpulse_user_cause_count gauge",
+        ])
+
+    if saw_cause:
+        header.extend([
+            "# HELP hostpulse_user_cause One series per threshold breach: the offending metric value for this user.",
+            "# TYPE hostpulse_user_cause gauge",
+        ])
+
+    if saw_threshold:
+        header.extend([
+            "# HELP hostpulse_user_cause_threshold Warning/critical thresholds of a breached metric (level label); per-user for lCPU-percent and email metrics.",
+            "# TYPE hostpulse_user_cause_threshold gauge",
+        ])
+
     target = Path(prom_output)
     if not target.is_absolute():
         target = BASE_DIR / target
 
     target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    target.write_text("\n".join(header + lines) + "\n", encoding="utf-8")
 
     logging.info("Prometheus output written to %s", target)
 

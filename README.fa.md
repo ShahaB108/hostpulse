@@ -178,9 +178,23 @@ warning/critical عبور کرده باشد یک‌بار وزن دسته خود
 `HOSTPULSE_PROM_OUTPUT` را به مسیری داخل دایرکتوری textfile collector
 node_exporter تنظیم کنید (مثلاً
 `/var/lib/node_exporter/textfile_collector/hostpulse.prom`) تا
-`hostpulse_user_score`، `hostpulse_user_status` و gauge های هر متریک مستقیم
-در Prometheus/Grafana ظاهر شوند — در کنار گزارش JSON برای مواردی که جزئیات
-کامل لازم دارند (causes، وضعیت هر کالکتور).
+`hostpulse_user_score`، `hostpulse_user_status`، gauge های هر متریک و
+جزئیات علل (causes) هر کاربر مستقیم در Prometheus/Grafana ظاهر شوند.
+از نسخه 2.2.0 هر علت (لیست `causes` در گزارش JSON) به‌صورت یک سری جداگانه
+export می‌شود، پس فایل `.prom` به‌تنهایی پاسخ «چرا این کاربر پرچم شده» را
+می‌دهد:
+
+```text
+hostpulse_user_cause{username="u",source="lveinfo",metric="pmemf",status="critical"} 62
+hostpulse_user_cause_threshold{username="u",source="lveinfo",metric="pmemf",level="warning"} 15
+hostpulse_user_cause_threshold{username="u",source="lveinfo",metric="pmemf",level="critical"} 30
+hostpulse_user_cause_count{username="u"} 1
+```
+
+سری آستانه‌ها (`level`) به‌ازای هر علت export می‌شود، چون برای متریک‌های
+درصدی lCPU (`acpu`، `cpu_percent`) و سقف ایمیل مبتنی بر hostname آستانه‌ها
+برای هر کاربر متفاوت‌اند. تنها وضعیت هر کالکتور (per-collector status)
+همچنان به گزارش JSON نیاز دارد.
 
 ## نکات طراحی (چرا این ساختار)
 
