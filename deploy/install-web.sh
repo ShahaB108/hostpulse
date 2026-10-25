@@ -2,6 +2,11 @@
 # Install the HostPulse web service (FastAPI JSON API on port 35707, protected
 # by an htpasswd file) plus the hourly systemd timer that refreshes the report.
 #
+# NOTE: this script is superseded by deploy/install.sh, which can install the
+# whole service (collector + Prometheus output + optionally this web panel)
+# both locally and remotely. Prefer:
+#   sudo bash deploy/install.sh --web
+#
 # Usage (as root):
 #   sudo bash deploy/install-web.sh
 # Optional overrides:

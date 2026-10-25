@@ -27,6 +27,9 @@ Run:            python3 -m uvicorn hostpulse_web:app --host 0.0.0.0 --port 35707
 Or simply:      python3 hostpulse_web.py
 Manage users:   python3 hostpulse_web.py --add-user admin
                           --htpasswd /opt/hostpulse/config/htpasswd
+Non-interactive (installers/CI; password is piped on stdin, one line):
+                printf '%s\n' "$PASSWORD" | python3 hostpulse_web.py \
+                          --add-user admin --password-stdin
 """
 
 import argparse
@@ -263,19 +266,27 @@ def metrics() -> Response:
 # htpasswd user management (so httpd-tools' htpasswd binary isn't required)
 # ---------------------------------------------------------------------------
 
-def add_user(username: str, path: Path, scheme: str = "apr1") -> None:
-    """Interactively add/update one user in the htpasswd file."""
+def add_user(username: str, path: Path, scheme: str = "apr1",
+             password: Optional[str] = None) -> None:
+    """
+    Add/update one user in the htpasswd file. When no password is supplied
+    (the interactive default) it is prompted for via getpass; automated
+    callers (the one-click installer, CI) must pass one via --password-stdin,
+    because getpass reads from the TTY and would fail with a piped stdin.
+    """
     # passlib's internal scheme name for `htpasswd -m` is apr_md5_crypt.
     scheme_names = {"apr1": "apr_md5_crypt", "bcrypt": "bcrypt"}
     passlib_scheme = scheme_names.get(scheme, scheme)
 
-    password = getpass.getpass("Password for %s: " % username)
-    confirm = getpass.getpass("Confirm password: ")
+    if password is None:
+        password = getpass.getpass("Password for %s: " % username)
+        confirm = getpass.getpass("Confirm password: ")
+
+        if password != confirm:
+            sys.exit("Passwords do not match")
 
     if not password:
         sys.exit("Empty passwords are not allowed")
-    if password != confirm:
-        sys.exit("Passwords do not match")
 
     if path.exists():
         htpasswd = HtpasswdFile(str(path))
@@ -315,10 +326,21 @@ def main() -> int:
         default="apr1",
         help="hash scheme for --add-user; bcrypt needs the bcrypt package (default: %(default)s)",
     )
+    parser.add_argument(
+        "--password-stdin",
+        action="store_true",
+        help="with --add-user: read the password from stdin (one line) instead "
+             "of prompting -- for non-interactive installers and CI",
+    )
     args = parser.parse_args()
 
     if args.add_user:
-        add_user(args.add_user, Path(args.htpasswd), args.scheme)
+        password = None
+        if args.password_stdin:
+            # getpass reads from the TTY, which doesn't exist when stdin is
+            # piped (curl | bash, CI); --password-stdin supplies it directly.
+            password = sys.stdin.readline().rstrip("\r\n")
+        add_user(args.add_user, Path(args.htpasswd), args.scheme, password)
         return 0
 
     uvicorn.run(app, host=args.host, port=args.port)

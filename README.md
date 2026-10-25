@@ -15,7 +15,90 @@ Everything HostPulse needs lives under its install directory
 `output/users.json`, logs and state. Only the systemd unit files go to
 `/etc/systemd/system/`.
 
-## Install
+## One-click install
+
+`deploy/install.sh` installs everything automatically. By default it sets up
+exactly what's needed to feed Prometheus/Grafana: the collector + an hourly
+systemd timer + the Prometheus textfile output — no venv, no pip (the
+collector is stdlib-only). The web panel is opt-in via `--web` (it is the
+only part that needs pip packages).
+
+From inside the repo checkout:
+
+```bash
+sudo bash deploy/install.sh             # collector + hourly timer + .prom output
+sudo bash deploy/install.sh --web       # + FastAPI panel with Basic Auth on :35707
+```
+
+Remote bootstrap (one line, no checkout needed — use the RAW link to this
+script; see the GitLab note below):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/ShahaB108/hostpulse/main/deploy/install.sh | sudo bash
+# with the web panel:
+curl -fsSL https://raw.githubusercontent.com/ShahaB108/hostpulse/main/deploy/install.sh | sudo bash -s -- --web
+```
+
+What the script does in this order:
+
+1. Resolves the code: running from inside a checkout uses those files as-is
+   (no download, ever); otherwise it downloads the tarball from
+   `--source`/`HOSTPULSE_SOURCE`.
+2. Preflight: root check, `python3 >= 3.6`, systemd presence (falls back to
+   `/etc/cron.d/hostpulse` when systemd is unavailable).
+3. Installs the application files to the install dir (default
+   `/opt/hostpulse`), creating `hostpulse.env` from the sample on first run
+   only.
+4. Configures `HOSTPULSE_PROM_OUTPUT` (on by default,
+   `/var/lib/node_exporter/textfile_collector/hostpulse.prom`) and optionally
+   `HOSTPULSE_IGNORED_USERS`.
+5. Runs the collector once so `users.json` and the `.prom` file exist
+   immediately after install (no 503 / missing metrics on first scrape).
+6. With `--web`: creates the venv, installs `requirements.txt`, generates a
+   RANDOM password for the panel login and prints it in the final summary
+   (store it then — it is not written anywhere else).
+7. Installs the systemd units (respecting `--install-dir`, `--web-port`,
+   `--interval` and the real `python3` path) and enables the timer — plus
+   `hostpulse-web.service` with `--web`.
+
+Options (each has a `HOSTPULSE_*` env-var equivalent so `curl | bash -s --`
+can pass configuration without quoting arguments):
+
+| Option | Default | What it does |
+|---|---|---|
+| `--source URL` | see below | tarball URL of the code (`HOSTPULSE_SOURCE`); only needed for remote installs |
+| `--install-dir DIR` | `/opt/hostpulse` | install location (`HOSTPULSE_INSTALL_DIR`) |
+| `--prom PATH` | `/var/lib/node_exporter/textfile_collector/hostpulse.prom` | Prometheus textfile output path (`HOSTPULSE_PROM_PATH`) |
+| `--no-prom` | — | disable Prometheus output |
+| `--web` | off | also install the web panel (`HOSTPULSE_INSTALL_WEB=1`) |
+| `--web-port N` | `35707` | panel port (`HOSTPULSE_WEB_PORT`) |
+| `--admin USER` | `admin` | panel login name (`HOSTPULSE_ADMIN_USER`) |
+| `--interval T` | `1h` | collection cadence, e.g. `15min`, `2h` (`HOSTPULSE_INTERVAL`) |
+| `--ignore-users A,B` | — | extra accounts to exclude (`HOSTPULSE_IGNORED_USERS`) |
+| `--uninstall` | — | stop and remove services/units (files kept) |
+| `--purge` | — | with `--uninstall`: also delete the install directory, including `hostpulse.env`, reports, state and the htpasswd |
+
+Notes:
+
+- **Migrating the source host (e.g. personal GitHub → organization GitLab)**:
+  the download URL lives in exactly one place — the `DEFAULT_SOURCE`
+  constant at the top of `deploy/install.sh` (GitHub and GitLab tarball
+  shapes are documented next to it). Update that line and the curl URL in
+  this README. Installs done from inside a checkout never download at all,
+  so they keep working unchanged.
+- **Idempotent/upgrade-friendly**: re-running the installer updates the
+  code and unit files but always keeps an existing `hostpulse.env`,
+  htpasswd, reports and state.
+- **Password reset** (forgot it, or want to change it):
+  ```bash
+  printf '%s\n' 'NEWPASS' | /opt/hostpulse/.venv/bin/python \
+    /opt/hostpulse/hostpulse_web.py --add-user admin \
+    --htpasswd /opt/hostpulse/config/htpasswd --password-stdin
+  ```
+
+## Manual install
+
+Everything below is what the one-click installer automates.
 
 ```bash
 sudo mkdir -p /opt/hostpulse
@@ -73,16 +156,17 @@ HTTP with `hostpulse_web.py` — a small FastAPI app protected by HTTP Basic
 Auth backed by an htpasswd file (this is the only part of HostPulse with
 pip dependencies; the collector itself stays stdlib-only).
 
-One-command install (creates a venv, generates the htpasswd, installs the
-systemd units and enables both the web service and the hourly timer):
+One-command install (recommended; installs the collector once, plus the venv,
+htpasswd, systemd units, and enables both the web service and the hourly timer):
 
 ```bash
-sudo bash deploy/install-web.sh
+sudo bash deploy/install.sh --web
 ```
 
-The script detects when it is being run from the install directory itself
-(e.g. `cd /opt/hostpulse && bash deploy/install-web.sh`, after copying the
-repo there) and safely skips the file copy in that case.
+The older `deploy/install-web.sh` still works when run from the install
+directory itself (e.g. `cd /opt/hostpulse && bash deploy/install-web.sh`, after
+copying the repo there) and safely skips the file copy in that case, but the
+full installer above supersedes it.
 
 Manual setup:
 
@@ -95,6 +179,10 @@ python3 -m venv .venv
 # Default location is /opt/hostpulse/config/htpasswd:
 .venv/bin/python hostpulse_web.py --add-user admin \
   --htpasswd /opt/hostpulse/config/htpasswd
+
+# Non-interactive variant (installers/CI); the password is piped on stdin:
+printf '%s\n' 'YOURPASSWORD' | .venv/bin/python hostpulse_web.py \
+  --add-user admin --htpasswd /opt/hostpulse/config/htpasswd --password-stdin
 ```
 
 Endpoints — everything except `/health` requires Basic Auth:

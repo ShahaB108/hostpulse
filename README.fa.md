@@ -14,7 +14,88 @@
 `output/users.json`، لاگ‌ها و state. فقط فایل‌های یونیت systemd به
 `/etc/systemd/system/` می‌روند.
 
-## نصب
+## نصب یک‌کلیکی
+
+`deploy/install.sh` همه‌چیز را به‌صورت خودکار نصب می‌کند. رفتار پیش‌فرض دقیقاً
+همان چیزی است که برای تغذیه Prometheus/Grafana لازم است: کالکتور + تایمر ساعتی
+systemd + خروجی Prometheus — بدون venv و بدون pip (کالکتور stdlib-only است).
+پنل وب اختیاری است و با `--web` نصب می‌شود (تنها بخشی که به پکیج‌های pip نیاز
+دارد).
+
+از داخل checkout ریپو:
+
+```bash
+sudo bash deploy/install.sh             # کالکتور + تایمر ساعتی + خروجی .prom
+sudo bash deploy/install.sh --web       # + پنل FastAPI با Basic Auth روی :35707
+```
+
+بوت‌استرپ از راه دور (یک خط، بدون نیاز به clone — لینک RAW همین اسکریپت؛
+نکته مهاجرت به GitLab پایین‌تر):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/ShahaB108/hostpulse/main/deploy/install.sh | sudo bash
+# همراه با پنل وب:
+curl -fsSL https://raw.githubusercontent.com/ShahaB108/hostpulse/main/deploy/install.sh | sudo bash -s -- --web
+```
+
+اسکریپت به این ترتیب کار می‌کند:
+
+1. تعیین منبع کد: اگر از داخل خود checkout اجرا شود همان فایل‌ها استفاده می‌شوند
+   (هیچ‌وقت دانلود نمی‌کند)؛ وگرنه tarball را از `--source`/`HOSTPULSE_SOURCE`
+   دانلود می‌کند.
+2. پیش‌چک: بررسی root،`python3 >= 3.6`، وجود systemd (در نبود systemd به
+   `/etc/cron.d/hostpulse` برمی‌گردد).
+3. نصب فایل‌های برنامه در دایرکتوری نصب (پیش‌فرض `/opt/hostpulse`)؛ ساخت
+   `hostpulse.env` از نمونه فقط در نصب اول.
+4. تنظیم `HOSTPULSE_PROM_OUTPUT` (پیش‌فرض روشن:
+   `/var/lib/node_exporter/textfile_collector/hostpulse.prom`) و در صورت نیاز
+   `HOSTPULSE_IGNORED_USERS`.
+5. یک‌بار اجرای کالکتور تا `users.json` و فایل `.prom` بلافاصله بعد از نصب
+   موجود باشند (بدون 503 / متریک خالی در اولین scrape).
+6. با `--web`: ساخت venv، نصب `requirements.txt`، تولید یک رمز تصادفی برای
+   ورود پنل و نمایش آن در خلاصه پایانی (همان لحظه ذخیره‌اش کنید — هیچ‌جای
+   دیگر نوشته نمی‌شود).
+7. نصب یونیت‌های systemd (با رعایت `--install-dir`، `--web-port`، `--interval`
+   و مسیر واقعی `python3`) و فعال‌سازی تایمر — و با `--web` سرویس
+   `hostpulse-web.service` هم.
+
+آپشن‌ها (هر کدام معادل env با پیشوند `HOSTPULSE_*` دارند تا از طریق
+`curl | bash -s --` بدون کوتیشن‌باز گرفتگی پاس شوند):
+
+| آپشن | پیش‌فرض | کار |
+|---|---|---|
+| `--source URL` | پایین‌تر | آدرس tarball کد (`HOSTPULSE_SOURCE`)؛ فقط برای نصب از راه دور |
+| `--install-dir DIR` | `/opt/hostpulse` | محل نصب (`HOSTPULSE_INSTALL_DIR`) |
+| `--prom PATH` | `/var/lib/node_exporter/textfile_collector/hostpulse.prom` | مسیر خروجی Prometheus (`HOSTPULSE_PROM_PATH`) |
+| `--no-prom` | — | غیرفعال‌کردن خروجی Prometheus |
+| `--web` | خاموش | نصب پنل وب نیز (`HOSTPULSE_INSTALL_WEB=1`) |
+| `--web-port N` | `35707` | پورت پنل (`HOSTPULSE_WEB_PORT`) |
+| `--admin USER` | `admin` | نام کاربری پنل (`HOSTPULSE_ADMIN_USER`) |
+| `--interval T` | `1h` | فاصله جمع‌آوری، مثلاً `15min`، `2h` (`HOSTPULSE_INTERVAL`) |
+| `--ignore-users A,B` | — | حساب‌های اضافی به‌حاشیه (`HOSTPULSE_IGNORED_USERS`) |
+| `--uninstall` | — | توقف و حذف سرویس‌ها/یونیت‌ها (فایل‌ها نگه داشته می‌شوند) |
+| `--purge` | — | همراه `--uninstall`: حذف کامل دایرکتوری نصب شامل `hostpulse.env`، گزارش‌ها، state و htpasswd |
+
+نکته‌ها:
+
+- **مهاجرت میزبان کد (مثلاً GitHub شخصی → GitLab سازمان)**: آدرس دانلود دقیقاً
+  در یک نقطه زندگی می‌کند — ثابت `DEFAULT_SOURCE` در ابتدای `deploy/install.sh`
+  (شکل tarball گیت‌هاب و گیت‌لب کنارش مستند شده). پس از مهاجرت فقط همان خط و
+  لینک curl در همین README را به‌روز کنید. نصب‌هایی که از داخل checkout اجرا
+  شده‌اند اصلاً نیاز به دانلود ندارند و بدون تغییر کار می‌کنند.
+- **Idempotent و مناسب آپگرید**: اجرای مجدد installer کد و یونیت‌ها را به‌روز
+  می‌کند، ولی همیشه `hostpulse.env` موجود، htpasswd، گزارش‌ها و state را نگه
+  می‌دارد.
+- **بازیابی رمز پنل** (فراموشی یا تغییر):
+  ```bash
+  printf '%s\n' 'NEWPASS' | /opt/hostpulse/.venv/bin/python \
+    /opt/hostpulse/hostpulse_web.py --add-user admin \
+    --htpasswd /opt/hostpulse/config/htpasswd --password-stdin
+  ```
+
+## نصب دستی
+
+موارد زیر همان کاری است که installer یک‌کلیکی به‌صورت خودکار انجام می‌دهد.
 
 ```bash
 sudo mkdir -p /opt/hostpulse
@@ -70,16 +151,17 @@ python3 -m collectors.live_stats
 بر فایل htpasswd — روی HTTP سرو کرد (وب‌سرویس تنها بخشی از HostPulse است که
 وابستگی pip دارد؛ خود کالکتور همچنان stdlib-only می‌ماند).
 
-نصب یک‌مرحله‌ای (ساخت venv، تولید htpasswd، نصب یونیت‌های systemd و
-فعال‌سازی وب‌سرویس + تایمر ساعتی):
+نصب یک‌فرمانی (توصیه‌شده؛ علاوه بر وب‌سرویس، خود کالکتور را هم یک‌جا نصب
+می‌کند — venv، htpasswd، یونیت‌های systemd و فعال‌سازی وب‌سرویس + تایمر):
 
 ```bash
-sudo bash deploy/install-web.sh
+sudo bash deploy/install.sh --web
 ```
 
-اسکریپت تشخیص می‌دهد که از داخل خود دایرکتوری نصب اجرا شده (مثلاً بعد از
-کپی ریپو در سرور: `cd /opt/hostpulse && bash deploy/install-web.sh`) و در
-آن حالت با خیال راحت کپی فایل‌ها را رد می‌کند.
+اسکریپت قدیمی‌تر `deploy/install-web.sh` همچنان کار می‌کند (وقتی از داخل خود
+دایرکتوری نصب اجرا شود، مثلاً پس از کپی ریپو: `cd /opt/hostpulse && bash
+deploy/install-web.sh`؛ در این حالت با خیال راحت کپی فایل‌ها را رد می‌کند)،
+اما installer کامل بالا جایگزین آن است.
 
 نصب دستی:
 
@@ -92,6 +174,10 @@ python3 -m venv .venv
 # مسیر پیش‌فرض /opt/hostpulse/config/htpasswd است:
 .venv/bin/python hostpulse_web.py --add-user admin \
   --htpasswd /opt/hostpulse/config/htpasswd
+
+# حالت غیرتعاملی (installer/CI)؛ رمز از stdin خوانده می‌شود:
+printf '%s\n' 'YOURPASSWORD' | .venv/bin/python hostpulse_web.py \
+  --add-user admin --htpasswd /opt/hostpulse/config/htpasswd --password-stdin
 ```
 
 Endpoint ها — همه به‌جز `/health` نیاز به Basic Auth دارند:
